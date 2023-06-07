@@ -237,8 +237,11 @@ ntfs_parent_act(TSK_FS_FILE * fs_file, void * /*ptr*/)
 
 /****************/
 
+/**
+  * @returns 1 on error
+  */
 static uint8_t
-ntfs_dent_copy(NTFS_INFO * ntfs, ntfs_idxentry * idxe,
+ntfs_dent_copy(NTFS_INFO * ntfs, ntfs_idxentry * idxe, uintptr_t endaddr,
     TSK_FS_NAME * fs_name)
 {
     ntfs_attr_fname *fname = (ntfs_attr_fname *) & idxe->stream;
@@ -254,10 +257,18 @@ ntfs_dent_copy(NTFS_INFO * ntfs, ntfs_idxentry * idxe,
 
     name16 = (UTF16 *) & fname->name;
     name8 = (UTF8 *) fs_name->name;
+    
+    const UTF16 * sourceEnd = (UTF16 *) ((uintptr_t) name16 + fname->nlen * 2);
+    if (((uintptr_t) sourceEnd) >= endaddr) {
+        if (tsk_verbose)
+            tsk_fprintf(stderr,
+                "sourceEnd: %" PRIuINUM " is out of endaddr bounds: %" PRIuINUM,
+                sourceEnd, endaddr);
+        return 1;
+    }
 
     retVal = tsk_UTF16toUTF8(fs->endian, (const UTF16 **) &name16,
-        (UTF16 *) ((uintptr_t) name16 +
-            fname->nlen * 2), &name8,
+        sourceEnd, &name8,
         (UTF8 *) ((uintptr_t) name8 +
             fs_name->name_size), TSKlenientConversion);
 
@@ -549,7 +560,7 @@ ntfs_proc_idxentry(NTFS_INFO * a_ntfs, TSK_FS_DIR * a_fs_dir,
         }
 
         /* Copy it into the generic form */
-        if (ntfs_dent_copy(a_ntfs, a_idxe, fs_name)) {
+        if (ntfs_dent_copy(a_ntfs, a_idxe, endaddr, fs_name)) {
             if (tsk_verbose)
                 tsk_fprintf(stderr,
                     "ntfs_proc_idxentry: Skipping because error copying dent_entry\n");
@@ -1002,7 +1013,7 @@ ntfs_dir_open_meta(TSK_FS_INFO * a_fs, TSK_FS_DIR ** a_fs_dir,
         }
     }
     else {
-        int off;
+        unsigned int off;
 
         if (fs_attr_idx->flags & TSK_FS_ATTR_RES) {
             tsk_error_reset();
@@ -1012,11 +1023,22 @@ ntfs_dir_open_meta(TSK_FS_INFO * a_fs, TSK_FS_DIR ** a_fs_dir,
             return TSK_COR;
         }
 
+        // Taking 128 MiB as an arbitrary upper bound
+        if (fs_attr_idx->nrd.allocsize > (128 * 1024 * 1024)) {
+            tsk_error_reset();
+           tsk_error_set_errno(TSK_ERR_FS_INODE_COR);
+           tsk_error_set_errstr
+               ("fs_attr_idx->nrd.allocsize value out of bounds");
+           return TSK_COR;
+        }
+
         /*
          * Copy the index allocation run into a big buffer
          */
         idxalloc_len = fs_attr_idx->nrd.allocsize;
-        if ((idxalloc = (char *)tsk_malloc((size_t) idxalloc_len)) == NULL) {
+        // default to null unless length is greater than 0
+        idxalloc = NULL;
+        if ((idxalloc_len > 0) && ((idxalloc = (char *)tsk_malloc((size_t)idxalloc_len)) == NULL)) {
             return TSK_ERR;
         }
 
@@ -1068,7 +1090,7 @@ ntfs_dir_open_meta(TSK_FS_INFO * a_fs, TSK_FS_DIR ** a_fs_dir,
             uint32_t list_len, rec_len;
 
             // Ensure that there is enough data for an idxrec
-            if (sizeof(ntfs_idxrec) > idxalloc_len - off) {
+            if ((idxalloc_len < sizeof(ntfs_idxrec)) || (off > idxalloc_len - sizeof(ntfs_idxrec))) {
                 tsk_error_reset();
                 tsk_error_set_errno(TSK_ERR_FS_INODE_COR);
                 tsk_error_set_errstr

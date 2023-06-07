@@ -79,7 +79,9 @@ logical_close(TSK_IMG_INFO * img_info)
 static ssize_t
 logical_read(TSK_IMG_INFO * img_info, TSK_OFF_T offset, char *buf, size_t len)
 {
-	printf("Logical image read not supported\n");
+	tsk_error_reset();
+	tsk_error_set_errno(TSK_ERR_IMG_READ);
+	tsk_error_set_errstr("logical_read: Logical image read is not supported");
 	return 0;
 }
 
@@ -168,7 +170,8 @@ logical_open(int a_num_img, const TSK_TCHAR * const a_images[],
 	TSTRNCPY(logical_info->base_path, a_images[0], len + 1);
 	// Remove trailing slash
 #ifdef TSK_WIN32
-	if (logical_info->base_path[TSTRLEN(logical_info->base_path) - 1] == L'/') {
+	if ((logical_info->base_path[TSTRLEN(logical_info->base_path) - 1] == L'/') 
+			|| (logical_info->base_path[TSTRLEN(logical_info->base_path) - 1] == L'\\')) {
 		logical_info->base_path[TSTRLEN(logical_info->base_path) - 1] = '\0';
 	}
 #else
